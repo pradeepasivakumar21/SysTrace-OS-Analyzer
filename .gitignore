@@ -1,0 +1,11 @@
+dashboard/node_modules/
+dashboard/dist/
+node_modules/
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+
+ipc/pipe_demo
+ipc/shm_demo
