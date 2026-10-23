@@ -9,3 +9,11 @@ venv/
 
 ipc/pipe_demo
 ipc/shm_demo
+
+# SysTrace backend generated files
+backend/__pycache__/
+backend/*.pyc
+backend/file_demo
+backend/process_demo
+backend/*.trace
+backend/sample.txt
