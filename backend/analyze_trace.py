@@ -1,39 +1,37 @@
 import re
 import sys
+from pathlib import Path
 from collections import defaultdict
 
-if len(sys.argv) != 2:
-    print("Usage: python3 analyze_trace.py <trace_file>")
-    sys.exit(1)
 
-trace_file = sys.argv[1]
+SYSCALL_PATTERN = re.compile(
+    r"^\d{2}:\d{2}:\d{2}\.\d+\s+([A-Za-z_][A-Za-z0-9_]*)\("
+)
 
-stats = defaultdict(lambda: {
-    "calls": 0,
-    "errors": 0,
-    "total_time": 0.0
-})
+RESULT_PATTERN = re.compile(r"\)\s+=\s+(-?\d+)(?:\s|$)")
+DURATION_PATTERN = re.compile(r"<([\d.]+)>$")
 
-total_calls = 0
-total_errors = 0
-total_time = 0.0
 
-try:
-    with open(trace_file, "r", encoding="utf-8") as file:
+def analyze_trace_file(trace_file):
+    """Analyze a timestamped strace log and return structured statistics."""
+
+    trace_path = Path(trace_file)
+
+    stats = defaultdict(
+        lambda: {"calls": 0, "errors": 0, "total_time": 0.0}
+    )
+
+    total_calls = 0
+    total_errors = 0
+    total_time = 0.0
+
+    with trace_path.open("r", encoding="utf-8") as file:
         for line in file:
             line = line.strip()
 
-            # Extract the system-call name.
-            syscall_match = re.match(
-                r"^\d{2}:\d{2}:\d{2}\.\d+\s+([A-Za-z_][A-Za-z0-9_]*)\(",
-                line
-            )
-
-            # Extract the return value.
-            result_match = re.search(r"\)\s+=\s+(-?\d+)", line)
-
-            # Extract the duration at the end of the line.
-            duration_match = re.search(r"<([\d.]+)>$", line)
+            syscall_match = SYSCALL_PATTERN.match(line)
+            result_match = RESULT_PATTERN.search(line)
+            duration_match = DURATION_PATTERN.search(line)
 
             if not (syscall_match and result_match and duration_match):
                 continue
@@ -52,43 +50,77 @@ try:
                 stats[syscall]["errors"] += 1
                 total_errors += 1
 
-except FileNotFoundError:
-    print(f"Error: Trace file '{trace_file}' was not found.")
-    sys.exit(1)
+    syscall_results = []
 
-print("\n========== SysTrace Analyzer ==========")
-print(f"Trace file: {trace_file}")
-print(f"Total system calls analyzed: {total_calls}")
-print(f"Failed system calls:         {total_errors}")
-print(f"Total measured time:         {total_time * 1_000_000:.2f} microseconds")
+    for name, data in sorted(
+        stats.items(),
+        key=lambda item: item[1]["total_time"],
+        reverse=True,
+    ):
+        calls = data["calls"]
+        total_us = data["total_time"] * 1_000_000
 
-print("\n--------------- Statistics ---------------")
-print(
-    f"{'System Call':<18}"
-    f"{'Calls':>8}"
-    f"{'Errors':>8}"
-    f"{'Total (us)':>15}"
-    f"{'Average (us)':>16}"
-)
-print("-" * 65)
+        syscall_results.append({
+            "name": name,
+            "calls": calls,
+            "errors": data["errors"],
+            "total_time_microseconds": round(total_us, 2),
+            "average_time_microseconds": round(total_us / calls, 2),
+        })
 
-for name, data in sorted(
-    stats.items(),
-    key=lambda item: item[1]["total_time"],
-    reverse=True
-):
-    calls = data["calls"]
-    errors = data["errors"]
-    total_us = data["total_time"] * 1_000_000
-    average_us = total_us / calls
+    return {
+        "trace_file": str(trace_path),
+        "total_calls": total_calls,
+        "failed_calls": total_errors,
+        "total_time_microseconds": round(total_time * 1_000_000, 2),
+        "syscalls": syscall_results,
+    }
 
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: python3 analyze_trace.py <trace_file>")
+        sys.exit(1)
+
+    trace_file = sys.argv[1]
+
+    try:
+        result = analyze_trace_file(trace_file)
+    except FileNotFoundError:
+        print(f"Error: Trace file '{trace_file}' was not found.")
+        sys.exit(1)
+
+    print("\n========== SysTrace Analyzer ==========")
+    print(f"Trace file: {result['trace_file']}")
+    print(f"Total system calls analyzed: {result['total_calls']}")
+    print(f"Failed system calls:         {result['failed_calls']}")
     print(
-        f"{name:<18}"
-        f"{calls:>8}"
-        f"{errors:>8}"
-        f"{total_us:>15.2f}"
-        f"{average_us:>16.2f}"
+        "Total measured time:         "
+        f"{result['total_time_microseconds']:.2f} microseconds"
     )
 
-print("-" * 65)
-print("Analysis completed successfully!")
+    print("\n--------------- Statistics ---------------")
+    print(
+        f"{'System Call':<18}"
+        f"{'Calls':>8}"
+        f"{'Errors':>8}"
+        f"{'Total (us)':>15}"
+        f"{'Average (us)':>16}"
+    )
+    print("-" * 65)
+
+    for item in result["syscalls"]:
+        print(
+            f"{item['name']:<18}"
+            f"{item['calls']:>8}"
+            f"{item['errors']:>8}"
+            f"{item['total_time_microseconds']:>15.2f}"
+            f"{item['average_time_microseconds']:>16.2f}"
+        )
+
+    print("-" * 65)
+    print("Analysis completed successfully!")
+
+
+if __name__ == "__main__":
+    main()
