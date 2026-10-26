@@ -4,6 +4,15 @@ import './index.css'
 
 function App() {
   const [traces, setTraces] = useState([])
+  const [activeView, setActiveView] = useState('Dashboard')
+
+  const menuItems = [
+    'Dashboard',
+    'System Calls',
+    'Process Monitor',
+    'IPC Analysis',
+    'Event Timeline'
+  ]
 
   useEffect(() => {
     fetch('/traces.json')
@@ -48,7 +57,7 @@ function App() {
     ...allCalls.filter(call => call.trace === 'shm_trace.txt').slice(0, 5)
   ]
 
-  const getTimelineEvents = (trace) => {
+  const getTimelineEvents = trace => {
     const priority = [
       'pipe2',
       'ftruncate',
@@ -74,64 +83,87 @@ function App() {
       .slice(0, 10)
   }
 
+  const descriptions = {
+    Dashboard: 'Overview of system calls, processes and IPC activity.',
+    'System Calls': 'View system-call counts from captured trace files.',
+    'Process Monitor': 'View parent and child process information.',
+    'IPC Analysis': 'Compare pipe and shared-memory communication.',
+    'Event Timeline': 'Explore events recorded in the trace data.'
+  }
+
+  const showOverview = activeView === 'Dashboard'
+  const showCalls = showOverview || activeView === 'System Calls'
+  const showIPC = showOverview || activeView === 'IPC Analysis'
+  const showTimeline = showOverview || activeView === 'Event Timeline'
+
   return (
     <div className="app">
       <aside className="sidebar">
         <h2>SysTrace</h2>
         <p className="subtitle">OS ANALYTICS</p>
 
-        <div className="active">Dashboard</div>
-        <div className="menu-item">System Calls</div>
-        <div className="menu-item">Process Monitor</div>
-        <div className="menu-item">IPC Analysis</div>
-        <div className="menu-item">Event Timeline</div>
+        <nav aria-label="Main navigation">
+          {menuItems.map(item => (
+            <button
+              type="button"
+              key={item}
+              className={activeView === item ? 'active' : 'menu-item'}
+              onClick={() => setActiveView(item)}
+              aria-current={activeView === item ? 'page' : undefined}
+            >
+              {item}
+            </button>
+          ))}
+        </nav>
 
         <div className="sidebar-bottom">
           <span className="status-dot"></span>
-          Tracing engine not connected
+          {traces.length > 0 ? 'Trace data loaded' : 'Loading trace data'}
         </div>
       </aside>
 
       <main className="main">
         <header className="topbar">
           <div>
-            <p className="eyebrow">SYSTEM MONITORING / OVERVIEW</p>
-            <h1>System Dashboard</h1>
-            <p className="description">
-              Monitor system calls, processes and inter-process communication.
+            <p className="eyebrow">
+              SYSTEM MONITORING / {activeView.toUpperCase()}
             </p>
+            <h1>{activeView === 'Dashboard' ? 'System Dashboard' : activeView}</h1>
+            <p className="description">{descriptions[activeView]}</p>
           </div>
           <span className="badge">TRACE DATA</span>
         </header>
 
-        <section className="stats">
-          <article className="stat-card">
-            <p>Total System Calls</p>
-            <h2>{totalCalls.toLocaleString()}</h2>
-            <span>Loaded from IPC trace files</span>
-          </article>
+        {showOverview && (
+          <section className="stats">
+            <article className="stat-card">
+              <p>Total System Calls</p>
+              <h2>{totalCalls.toLocaleString()}</h2>
+              <span>Loaded from trace data</span>
+            </article>
 
-          <article className="stat-card">
-            <p>Active Processes</p>
-            <h2>2</h2>
-            <span>Parent and child in demo programs</span>
-          </article>
+            <article className="stat-card">
+              <p>Active Processes</p>
+              <h2>2</h2>
+              <span>Parent and child demo processes</span>
+            </article>
 
-          <article className="stat-card">
-            <p>IPC Events</p>
-            <h2>{ipcEvents}</h2>
-            <span>Selected IPC-related call counts</span>
-          </article>
+            <article className="stat-card">
+              <p>IPC Events</p>
+              <h2>{ipcEvents}</h2>
+              <span>Selected IPC-related call counts</span>
+            </article>
 
-          <article className="stat-card">
-            <p>Failed Calls</p>
-            <h2>—</h2>
-            <span>Failure counting not implemented</span>
-          </article>
-        </section>
+            <article className="stat-card">
+              <p>Failed Calls</p>
+              <h2>—</h2>
+              <span>Failure counting not implemented</span>
+            </article>
+          </section>
+        )}
 
-        <section className="content-grid">
-          <article className="panel">
+        {showCalls && (
+          <section className="panel">
             <div className="panel-heading">
               <div>
                 <h3>System Call Activity</h3>
@@ -171,12 +203,48 @@ function App() {
                       <td colSpan="4">Loading trace data...</td>
                     </tr>
                   )}
+
+                  {traces.length > 0 && visibleCalls.length === 0 && (
+                    <tr>
+                      <td colSpan="4">No system-call entries available.</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
-          </article>
+          </section>
+        )}
 
-          <article className="panel">
+        {activeView === 'Process Monitor' && (
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <h3>Process Monitor</h3>
+                <p>Parent-child process relationship in the IPC demos</p>
+              </div>
+              <span className="small-tag">PROCESS VIEW</span>
+            </div>
+
+            <div className="process-flow">
+              <div className="process-box">Parent Process</div>
+              <div className="flow-arrow">↓ Creates child using fork() ↓</div>
+              <div className="process-box child">Child Process</div>
+              <div className="flow-arrow">↑ Parent waits using waitpid() ↑</div>
+              <div className="process-box">Process synchronization</div>
+            </div>
+
+            <p>
+              The parent and child process demonstrations show how Linux
+              creates processes and coordinates their execution.
+            </p>
+            <p>
+              Trace files loaded: {traces.length}
+            </p>
+          </section>
+        )}
+
+        {showIPC && (
+          <section className="panel">
             <div className="panel-heading">
               <div>
                 <h3>IPC Activity</h3>
@@ -209,60 +277,61 @@ function App() {
               <span className="success">Captured</span>
             </div>
 
-            <div className="process-flow">
-              <div className="process-box">Parent Process</div>
-              <div className="flow-arrow">↓ IPC message ↓</div>
-              <div className="process-box child">Child Process</div>
+            {showOverview && (
+              <div className="process-flow">
+                <div className="process-box">Parent Process</div>
+                <div className="flow-arrow">↓ IPC message ↓</div>
+                <div className="process-box child">Child Process</div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {showTimeline && (
+          <section className="panel event-timeline">
+            <div className="panel-heading">
+              <div>
+                <h3>Event Timeline</h3>
+                <p>Events recorded in captured trace entries</p>
+              </div>
+              <span className="small-tag">TRACE DATA</span>
             </div>
-          </article>
-        </section>
 
-        <section className="panel event-timeline">
-          <div className="panel-heading">
-            <div>
-              <h3>Event Timeline</h3>
-              <p>IPC-related calls from captured trace entries</p>
-            </div>
-            <span className="small-tag">TRACE DATA</span>
-          </div>
+            {traces.map(trace => (
+              <div key={trace.trace} className="timeline-group">
+                <h3>
+                  {trace.trace === 'pipe_trace.txt'
+                    ? 'Pipe Demo'
+                    : 'Shared Memory Demo'}
+                </h3>
 
-          {traces.map(trace => (
-            <div key={trace.trace} className="timeline-group">
-              <h3>
-                {trace.trace === 'pipe_trace.txt'
-                  ? 'Pipe Demo'
-                  : 'Shared Memory Demo'}
-              </h3>
-
-              {trace.events?.length ? (
-                getTimelineEvents(trace).map((event, index) => (
-                  <div
-                    className="timeline-event"
-                    key={`${trace.trace}-${index}`}
-                  >
-                    <span className="timeline-number">{index + 1}</span>
-                    <div>
-                      <strong>{event.name}()</strong>
-                      <p>{event.details}</p>
-                      <small>Process ID: {event.process_id}</small>
+                {trace.events?.length ? (
+                  getTimelineEvents(trace).map((event, index) => (
+                    <div
+                      className="timeline-event"
+                      key={`${trace.trace}-${index}`}
+                    >
+                      <span className="timeline-number">{index + 1}</span>
+                      <div>
+                        <strong>{event.name}()</strong>
+                        <p>{event.details}</p>
+                        <small>Process ID: {event.process_id}</small>
+                      </div>
                     </div>
-                  </div>
-                ))
-              ) : (
-                <p>No individual events available for this trace.</p>
-              )}
-            </div>
-          ))}
+                  ))
+                ) : (
+                  <p>No individual events available for this trace.</p>
+                )}
+              </div>
+            ))}
 
-          {traces.length === 0 && <p>Loading timeline data...</p>}
-        </section>
+            {traces.length === 0 && <p>Loading timeline data...</p>}
+          </section>
+        )}
 
         <footer>
           SysTrace · Operating Systems Project · Member 2
-          <p>
-            Displaying captured IPC trace summaries and individual trace entries.
-            Live tracing is not connected yet.
-          </p>
+          <p>{descriptions[activeView]}</p>
         </footer>
       </main>
     </div>
