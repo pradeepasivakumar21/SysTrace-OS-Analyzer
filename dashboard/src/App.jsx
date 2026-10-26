@@ -1,9 +1,78 @@
-
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import './index.css'
 
 function App() {
   const [traces, setTraces] = useState([])
+  const [activeView, setActiveView] = useState('Dashboard')
+
+  const menuItems = [
+    'Dashboard',
+    'System Calls',
+    'Process Monitor',
+    'IPC Analysis',
+    'Event Timeline'
+  ]
+
+  const descriptions = {
+    Dashboard: 'Overview of live system calls, processes and IPC activity.',
+    'System Calls': 'Inspect live system-call counts, errors and timings.',
+    'Process Monitor': 'View parent-child process relationships.',
+    'IPC Analysis': 'Compare pipe and shared-memory communication.',
+    'Event Timeline': 'Explore events recorded in live system traces.'
+  }
+
+  const showOverview = activeView === 'Dashboard'
+  const showCalls = showOverview || activeView === 'System Calls'
+  const showIPC = showOverview || activeView === 'IPC Analysis'
+  const showTimeline = showOverview || activeView === 'Event Timeline'
+  const [demos, setDemos] = useState([])
+  const [selectedDemo, setSelectedDemo] = useState('process')
+  const [liveTrace, setLiveTrace] = useState(null)
+  const [apiStatus, setApiStatus] = useState('checking')
+  const [apiError, setApiError] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
+
+  const loadLiveTrace = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/trace-program/${selectedDemo}`)
+
+      if (!response.ok) {
+        let message = `Backend request failed (${response.status})`
+
+        try {
+          const errorBody = await response.json()
+
+          if (errorBody.detail) {
+            message = typeof errorBody.detail === 'string'
+              ? errorBody.detail
+              : JSON.stringify(errorBody.detail)
+          }
+        } catch {
+          // Keep the HTTP status message if the response isn't JSON.
+        }
+
+        throw new Error(message)
+      }
+
+      const data = await response.json()
+      setLiveTrace(data)
+      setApiStatus('connected')
+      setApiError('')
+    } catch (error) {
+      setApiStatus('disconnected')
+      setApiError(error.message || 'Unable to contact the backend.')
+    }
+  }, [selectedDemo])
+
+  const refreshLiveTrace = useCallback(async () => {
+    setRefreshing(true)
+
+    try {
+      await loadLiveTrace()
+    } finally {
+      setRefreshing(false)
+    }
+  }, [loadLiveTrace])
 
   useEffect(() => {
     fetch('/traces.json')
@@ -17,18 +86,74 @@ function App() {
       .catch(error => console.error('Error loading traces:', error))
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+
+    fetch('/api/demos')
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`Could not load demos (${response.status})`)
+        }
+        return response.json()
+      })
+      .then(data => {
+        if (!cancelled) setDemos(data.demos || [])
+      })
+      .catch(error => {
+        if (!cancelled) console.error('Error loading demos:', error)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    fetch(`/api/trace-program/${selectedDemo}`)
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`Backend request failed (${response.status})`)
+        }
+        return response.json()
+      })
+      .then(data => {
+        if (cancelled) return
+        setLiveTrace(data)
+        setApiStatus('connected')
+        setApiError('')
+      })
+      .catch(error => {
+        if (cancelled) return
+        setApiStatus('disconnected')
+        setApiError(error.message || 'Unable to contact the backend.')
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedDemo])
+
   const totalCalls = traces.reduce(
     (total, trace) => total + trace.total_calls,
     0
   )
 
-  const ipcEvents = traces.reduce((total, trace) => {
-    return total + trace.system_calls
-      .filter(call =>
-        ['pipe2', 'clone', 'read', 'write', 'mmap', 'ftruncate'].includes(call.name)
-      )
-      .reduce((sum, call) => sum + call.count, 0)
-  }, 0)
+  const ipcCallNames = [
+    'pipe', 'pipe2', 'clone', 'fork', 'vfork',
+    'read', 'write', 'mmap', 'ftruncate'
+  ]
+
+  const ipcEvents = liveTrace?.analysis?.syscalls
+    ? liveTrace.analysis.syscalls
+        .filter(call => ipcCallNames.includes(call.name))
+        .reduce((total, call) => total + call.calls, 0)
+    : traces.reduce((total, trace) => {
+        return total + trace.system_calls
+          .filter(call => ipcCallNames.includes(call.name))
+          .reduce((sum, call) => sum + call.count, 0)
+      }, 0)
 
   const allCalls = traces.flatMap(trace =>
     trace.system_calls.map(call => ({
@@ -48,30 +173,49 @@ function App() {
     ...allCalls.filter(call => call.trace === 'shm_trace.txt').slice(0, 5)
   ]
 
-  const getTimelineEvents = (trace) => {
+  const getTimelineEvents = trace => {
     const priority = [
       'pipe2',
       'ftruncate',
+      'clone',
       'read',
       'write',
-      'clone',
       'munmap',
       'unlink',
       'mmap',
-      'openat'
+      'openat',
+      'wait4',
+      'waitpid'
     ]
 
     return [...(trace.events || [])]
-      .sort((a, b) => {
-        const aPriority = priority.indexOf(a.name)
-        const bPriority = priority.indexOf(b.name)
-
-        return (
-          (aPriority === -1 ? priority.length : aPriority) -
-          (bPriority === -1 ? priority.length : bPriority)
-        )
-      })
+      .filter(event => priority.includes(event.name))
+      .sort((a, b) => priority.indexOf(a.name) - priority.indexOf(b.name))
       .slice(0, 10)
+  }
+
+  const getEventDescription = event => {
+    const descriptions = {
+      pipe2: 'Creates a pipe that processes can use to exchange data.',
+      clone: 'Creates a child process or thread.',
+      fork: 'Creates a child process.',
+      read: 'Reads data from a file descriptor or communication channel.',
+      write: 'Writes data to a file descriptor or communication channel.',
+      openat: 'Opens a file or shared-memory object.',
+      ftruncate: 'Sets the size of a file or shared-memory object.',
+      mmap: 'Maps memory into the process address space.',
+      munmap: 'Removes a memory mapping from the process.',
+      unlink: 'Removes a file or shared-memory name.',
+      close: 'Closes an open file descriptor.',
+      wait4: 'Waits for a child process and collects its status.',
+      waitpid: 'Waits for a specified child process.',
+      execve: 'Starts a program by replacing the current process image.',
+      brk: 'Adjusts the process heap used for dynamic memory allocation.',
+      nanosleep: 'Pauses the process for a specified duration.'
+    }
+
+    return descriptions[event.name] ||
+      'System call observed in the captured trace.'
   }
 
   return (
@@ -80,57 +224,224 @@ function App() {
         <h2>SysTrace</h2>
         <p className="subtitle">OS ANALYTICS</p>
 
-        <div className="active">Dashboard</div>
-        <div className="menu-item">System Calls</div>
-        <div className="menu-item">Process Monitor</div>
-        <div className="menu-item">IPC Analysis</div>
-        <div className="menu-item">Event Timeline</div>
+        <nav aria-label="Main navigation">
+          {menuItems.map(item => (
+            <button
+              type="button"
+              key={item}
+              className={activeView === item ? 'active' : 'menu-item'}
+              onClick={() => setActiveView(item)}
+              aria-current={activeView === item ? 'page' : undefined}
+            >
+              {item}
+            </button>
+          ))}
+        </nav>
 
         <div className="sidebar-bottom">
           <span className="status-dot"></span>
-          Tracing engine not connected
+          {apiStatus === 'connected'
+            ? 'Backend connected'
+            : apiStatus === 'disconnected'
+              ? 'Backend disconnected'
+              : 'Connecting to backend...'}
         </div>
       </aside>
 
       <main className="main">
         <header className="topbar">
           <div>
-            <p className="eyebrow">SYSTEM MONITORING / OVERVIEW</p>
-            <h1>System Dashboard</h1>
-            <p className="description">
-              Monitor system calls, processes and inter-process communication.
-            </p>
+            <p className="eyebrow">SYSTEM MONITORING / {activeView.toUpperCase()}</p>
+            <h1>{activeView === 'Dashboard' ? 'System Dashboard' : activeView}</h1>
+            <p className="description">{descriptions[activeView]}</p>
           </div>
-          <span className="badge">TRACE DATA</span>
+          <span className="badge">
+            {apiStatus === 'connected'
+              ? 'LIVE API CONNECTED'
+              : apiStatus === 'disconnected'
+                ? 'API DISCONNECTED'
+                : 'CONNECTING...'}
+          </span>
         </header>
 
-        <section className="stats">
+        {showOverview && (
+          <section className="stats">
           <article className="stat-card">
             <p>Total System Calls</p>
-            <h2>{totalCalls.toLocaleString()}</h2>
-            <span>Loaded from IPC trace files</span>
+            <h2>
+              {(liveTrace?.analysis?.total_calls ?? totalCalls).toLocaleString()}
+            </h2>
+            <span>
+              {liveTrace
+                ? 'From the latest live demo trace'
+                : 'Showing saved IPC trace count until connected'}
+            </span>
           </article>
 
           <article className="stat-card">
             <p>Active Processes</p>
-            <h2>2</h2>
-            <span>Parent and child in demo programs</span>
+            <h2>
+              {liveTrace?.analysis?.processes_observed ?? '—'}
+            </h2>
+            <span>Processes observed in the selected demo</span>
           </article>
 
           <article className="stat-card">
-            <p>IPC Events</p>
+            <p>IPC-Related Calls</p>
             <h2>{ipcEvents}</h2>
             <span>Selected IPC-related call counts</span>
           </article>
 
           <article className="stat-card">
             <p>Failed Calls</p>
-            <h2>—</h2>
-            <span>Failure counting not implemented</span>
+            <h2>
+              {liveTrace
+                ? liveTrace.analysis.failed_calls.toLocaleString()
+                : '—'}
+            </h2>
+            <span>
+              {liveTrace
+                ? 'Failed calls in the latest live trace'
+                : 'Waiting for live trace data'}
+            </span>
           </article>
         </section>
+        )}
 
+        {(showOverview || activeView === 'System Calls') && (
+        <section className="panel live-analysis-panel">
+          <div className="panel-heading">
+            <div>
+              <h3>Live System Call Analysis</h3>
+              <p>Select a demo to capture and analyze its system calls</p>
+            </div>
+
+            <div>
+              <label htmlFor="demo-selector" style={{ marginRight: '8px', fontSize: '13px' }}>
+                Demo:
+              </label>
+              <select
+                id="demo-selector"
+                value={selectedDemo}
+                onChange={event => setSelectedDemo(event.target.value)}
+                disabled={refreshing}
+                style={{ padding: '9px 10px', borderRadius: '8px', marginRight: '12px', maxWidth: '220px' }}
+              >
+                {demos.map(demo => (
+                  <option key={demo.id} value={demo.id}>
+                    {demo.name}
+                  </option>
+                ))}
+              </select>
+
+              <span className="small-tag">
+                {apiStatus === 'connected'
+                  ? 'CONNECTED'
+                  : apiStatus === 'disconnected'
+                    ? 'DISCONNECTED'
+                    : 'CONNECTING'}
+              </span>
+
+              <button
+                type="button"
+                onClick={refreshLiveTrace}
+                disabled={refreshing}
+                style={{
+                  marginLeft: '12px',
+                  padding: '9px 14px',
+                  border: '1px solid #475569',
+                  borderRadius: '8px',
+                  cursor: refreshing ? 'wait' : 'pointer',
+                  opacity: refreshing ? 0.65 : 1,
+                }}
+              >
+                {refreshing ? 'Tracing...' : 'Run / Refresh Demo'}
+              </button>
+            </div>
+          </div>
+
+          <p style={{ margin: '12px 0' }}>
+            Demo command:{' '}
+            <code>{liveTrace?.demo_command || '/bin/echo SysTrace API demo'}</code>
+          </p>
+
+          <p style={{ margin: '12px 0' }}>
+            Total measured syscall time:{' '}
+            <strong>
+              {liveTrace
+                ? `${liveTrace.analysis.total_time_microseconds.toLocaleString()} µs`
+                : '—'}
+            </strong>
+          </p>
+
+          {liveTrace?.program_output && (
+            <p style={{ margin: '12px 0' }}>
+              Program output: <strong>{liveTrace.program_output}</strong>
+            </p>
+          )}
+
+          {liveTrace?.analysis?.process_relationships?.length > 0 && (
+            <div style={{ margin: '12px 0' }}>
+              <strong>Process relationships: </strong>
+              {liveTrace.analysis.process_relationships.map((relationship, index) => (
+                <span key={`${relationship.parent_pid}-${relationship.child_pid}-${index}`}>
+                  Parent PID {relationship.parent_pid}
+                  {' → '}
+                  Child PID {relationship.child_pid}
+                  {index < liveTrace.analysis.process_relationships.length - 1 ? ' | ' : ''}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {apiError && (
+            <p role="alert" style={{ color: '#ef4444', margin: '12px 0' }}>
+              Backend error: {apiError}
+            </p>
+          )}
+
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>System Call</th>
+                  <th>Calls</th>
+                  <th>Errors</th>
+                  <th>Total Time (µs)</th>
+                  <th>Average Time (µs)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {liveTrace?.analysis?.syscalls?.length > 0 ? (
+                  liveTrace.analysis.syscalls.map(call => (
+                    <tr key={call.name}>
+                      <td>{call.name}()</td>
+                      <td>{call.calls.toLocaleString()}</td>
+                      <td>{call.errors.toLocaleString()}</td>
+                      <td>{call.total_time_microseconds.toLocaleString()}</td>
+                      <td>{call.average_time_microseconds.toLocaleString()}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan="5">
+                      {refreshing
+                        ? 'Collecting and analyzing system calls...'
+                        : apiStatus === 'disconnected'
+                          ? 'Live data is unavailable. Check that the backend server is running.'
+                          : 'Waiting for syscall results...'}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        )}
+
+        {(showCalls || showIPC) && (
         <section className="content-grid">
+          {showCalls && (
           <article className="panel">
             <div className="panel-heading">
               <div>
@@ -175,7 +486,9 @@ function App() {
               </table>
             </div>
           </article>
+          )}
 
+          {showIPC && (
           <article className="panel">
             <div className="panel-heading">
               <div>
@@ -215,53 +528,165 @@ function App() {
               <div className="process-box child">Child Process</div>
             </div>
           </article>
+          )}
         </section>
+        )}
 
+        {activeView === 'Process Monitor' && (
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <h3>Process Monitor</h3>
+                <p>Parent-child relationships from the selected live demo</p>
+              </div>
+              <span className="small-tag">LIVE PROCESS VIEW</span>
+            </div>
+
+            <div className="process-flow">
+              <div className="process-box">Parent Process</div>
+              <div className="flow-arrow">↓ Process communication ↓</div>
+              <div className="process-box child">Child Process</div>
+            </div>
+
+            <p>
+              Processes observed: {liveTrace?.analysis?.processes_observed ?? 'Waiting for live data'}
+            </p>
+
+            {liveTrace?.analysis?.process_relationships?.length > 0 ? (
+              liveTrace.analysis.process_relationships.map((relationship, index) => (
+                <p key={`${relationship.parent_pid}-${relationship.child_pid}-${index}`}>
+                  Parent PID {relationship.parent_pid}
+                  {' → '}
+                  Child PID {relationship.child_pid}
+                </p>
+              ))
+            ) : (
+              <p>
+                {liveTrace
+                  ? 'No parent-child relationship was reported for this demo.'
+                  : 'Waiting for live process data.'}
+              </p>
+            )}
+
+            {liveTrace?.program_output && (
+              <p>Program output: {liveTrace.program_output}</p>
+            )}
+          </section>
+        )}
+
+        {showTimeline && (
         <section className="panel event-timeline">
           <div className="panel-heading">
             <div>
               <h3>Event Timeline</h3>
-              <p>IPC-related calls from captured trace entries</p>
+              <p>Key system calls explained, with original trace details available</p>
             </div>
-            <span className="small-tag">TRACE DATA</span>
+            <span className="small-tag">
+              {liveTrace?.analysis?.events?.length > 0
+                ? 'LIVE TRACE'
+                : 'SAVED TRACE'}
+            </span>
           </div>
 
-          {traces.map(trace => (
-            <div key={trace.trace} className="timeline-group">
+          {liveTrace?.analysis?.events?.length > 0 ? (
+            <div className="timeline-group">
               <h3>
-                {trace.trace === 'pipe_trace.txt'
-                  ? 'Pipe Demo'
-                  : 'Shared Memory Demo'}
+                {demos.find(demo => demo.id === selectedDemo)?.name || selectedDemo}
+                {' — Live Events'}
               </h3>
 
-              {trace.events?.length ? (
-                getTimelineEvents(trace).map((event, index) => (
+              {getTimelineEvents({
+                events: liveTrace.analysis.events
+              }).length > 0 ? (
+                getTimelineEvents({
+                  events: liveTrace.analysis.events
+                }).map((event, index) => (
                   <div
                     className="timeline-event"
-                    key={`${trace.trace}-${index}`}
+                    key={`live-${event.process_id}-${event.name}-${index}`}
                   >
                     <span className="timeline-number">{index + 1}</span>
                     <div>
                       <strong>{event.name}()</strong>
-                      <p>{event.details}</p>
+                      <p>{getEventDescription(event)}</p>
                       <small>Process ID: {event.process_id}</small>
+                      <details style={{ marginTop: '8px' }}>
+                        <summary style={{ cursor: 'pointer' }}>
+                          View raw trace entry
+                        </summary>
+                        <pre
+                          style={{
+                            whiteSpace: 'pre-wrap',
+                            overflowWrap: 'anywhere',
+                            fontSize: '12px',
+                            marginTop: '8px'
+                          }}
+                        >
+                          {event.details}
+                        </pre>
+                      </details>
                     </div>
                   </div>
                 ))
               ) : (
-                <p>No individual events available for this trace.</p>
+                <p>No key system calls found in the live trace.</p>
               )}
             </div>
-          ))}
+          ) : (
+            traces.map(trace => (
+              <div key={trace.trace} className="timeline-group">
+                <h3>
+                  {trace.trace === 'pipe_trace.txt'
+                    ? 'Pipe Demo'
+                    : 'Shared Memory Demo'}
+                </h3>
 
-          {traces.length === 0 && <p>Loading timeline data...</p>}
+                {trace.events?.length ? (
+                  getTimelineEvents(trace).map((event, index) => (
+                    <div
+                      className="timeline-event"
+                      key={`${trace.trace}-${index}`}
+                    >
+                      <span className="timeline-number">{index + 1}</span>
+                      <div>
+                        <strong>{event.name}()</strong>
+                        <p>{getEventDescription(event)}</p>
+                        <small>Process ID: {event.process_id}</small>
+                        <details style={{ marginTop: '8px' }}>
+                          <summary style={{ cursor: 'pointer' }}>
+                            View raw trace entry
+                          </summary>
+                          <pre
+                            style={{
+                              whiteSpace: 'pre-wrap',
+                              overflowWrap: 'anywhere',
+                              fontSize: '12px',
+                              marginTop: '8px'
+                            }}
+                          >
+                            {event.details}
+                          </pre>
+                        </details>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <p>No individual events available for this trace.</p>
+                )}
+              </div>
+            ))
+          )}
+
+          {traces.length === 0 && !liveTrace?.analysis?.events?.length && (
+            <p>Loading timeline data...</p>
+          )}
         </section>
+        )}
 
         <footer>
           SysTrace · Operating Systems Project · Member 2
           <p>
-            Displaying captured IPC trace summaries and individual trace entries.
-            Live tracing is not connected yet.
+            {descriptions[activeView]} Live tracing is provided by the FastAPI backend.
           </p>
         </footer>
       </main>
