@@ -788,7 +788,7 @@ function App() {
         )}
 
         <footer>
-          SysTrace · Operating Systems Project · Member 2
+          SysTrace · Operating Systems Project 
           <p>
             {descriptions[activeView]} Live tracing is provided by the FastAPI backend.
           </p>
