@@ -360,41 +360,145 @@ function App() {
             </div>
           </div>
 
-          <p style={{ margin: '12px 0' }}>
-            Demo command:{' '}
-            <code>{liveTrace?.demo_command || '/bin/echo SysTrace API demo'}</code>
-          </p>
+         <div
+  style={{
+    display: 'grid',
+    gap: '16px',
+    margin: '20px 0',
+    color: '#e5e7eb',
+  }}
+>
+  <h3 style={{ margin: 0, fontSize: '22px', color: '#f8fafc' }}>
+    Process Demo Results
+  </h3>
 
-          <p style={{ margin: '12px 0' }}>
-            Total measured syscall time:{' '}
-            <strong>
-              {liveTrace
-                ? `${liveTrace.analysis.total_time_microseconds.toLocaleString()} µs`
-                : '—'}
-            </strong>
-          </p>
+  <div
+    style={{
+      background: '#111c30',
+      border: '1px solid #2b3b55',
+      borderRadius: '14px',
+      padding: '20px',
+    }}
+  >
+    <p style={{ margin: '0 0 12px', color: '#93c5fd', fontWeight: 600 }}>
+      Demo Command
+    </p>
+    <code
+      style={{
+        display: 'block',
+        padding: '14px',
+        background: '#080f1d',
+        borderRadius: '8px',
+        color: '#a7f3d0',
+        overflowWrap: 'anywhere',
+        lineHeight: 1.7,
+      }}
+    >
+      {liveTrace?.demo_command || '/bin/echo SysTrace API demo'}
+    </code>
+  </div>
 
-          {liveTrace?.program_output && (
-            <p style={{ margin: '12px 0' }}>
-              Program output: <strong>{liveTrace.program_output}</strong>
-            </p>
-          )}
+  <div
+    style={{
+      background: '#111c30',
+      border: '1px solid #2b3b55',
+      borderRadius: '14px',
+      padding: '20px',
+    }}
+  >
+    <p style={{ margin: '0 0 10px', color: '#93c5fd', fontWeight: 600 }}>
+      Total Measured System Call Time
+    </p>
+    <div style={{ fontSize: '32px', fontWeight: 700, color: '#6ee7b7' }}>
+      {liveTrace
+        ? `${liveTrace.analysis.total_time_microseconds.toLocaleString()} µs`
+        : '—'}
+    </div>
+  </div>
 
-          {liveTrace?.analysis?.process_relationships?.length > 0 && (
-            <div style={{ margin: '12px 0' }}>
-              <strong>Process relationships: </strong>
-              {liveTrace.analysis.process_relationships.map((relationship, index) => (
-                <span key={`${relationship.parent_pid}-${relationship.child_pid}-${index}`}>
-                  Parent PID {relationship.parent_pid}
-                  {' → '}
-                  Child PID {relationship.child_pid}
-                  {index < liveTrace.analysis.process_relationships.length - 1 ? ' | ' : ''}
-                </span>
-              ))}
+  <div
+    style={{
+      background: '#111c30',
+      border: '1px solid #2b3b55',
+      borderRadius: '14px',
+      padding: '20px',
+    }}
+  >
+    <p style={{ margin: '0 0 12px', color: '#93c5fd', fontWeight: 600 }}>
+      Program Output
+    </p>
+    <pre
+      style={{
+        margin: 0,
+        padding: '14px',
+        background: '#080f1d',
+        borderRadius: '8px',
+        color: '#d1d5db',
+        whiteSpace: 'pre-wrap',
+        overflowWrap: 'anywhere',
+        fontFamily: 'monospace',
+        lineHeight: 1.8,
+      }}
+    >
+      {liveTrace?.program_output || 'Waiting for program output...'}
+    </pre>
+  </div>
+
+  <div
+    style={{
+      background: '#111c30',
+      border: '1px solid #2b3b55',
+      borderRadius: '14px',
+      padding: '20px',
+    }}
+  >
+    <p style={{ margin: '0 0 16px', color: '#93c5fd', fontWeight: 600 }}>
+      Process Relationships
+    </p>
+
+    {liveTrace?.analysis?.process_relationships?.length > 0 ? (
+      <div style={{ display: 'grid', gap: '12px' }}>
+        {liveTrace.analysis.process_relationships.map((relationship, index) => (
+          <div
+            key={`${relationship.parent_pid}-${relationship.child_pid}-${index}`}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '12px',
+              padding: '16px',
+              background: '#182942',
+              border: '1px solid #344b68',
+              borderRadius: '10px',
+            }}
+          >
+            <div style={{ flex: '1 1 120px' }}>
+              <div style={{ fontSize: '11px', color: '#93c5fd' }}>PARENT</div>
+              <strong style={{ fontSize: '17px' }}>
+                PID {relationship.parent_pid}
+              </strong>
             </div>
-          )}
 
-          {apiError && (
+            <span style={{ fontSize: '22px', color: '#6ee7b7' }}>→</span>
+
+            <div style={{ flex: '1 1 120px' }}>
+              <div style={{ fontSize: '11px', color: '#6ee7b7' }}>CHILD</div>
+              <strong style={{ fontSize: '17px' }}>
+                PID {relationship.child_pid}
+              </strong>
+            </div>
+          </div>
+        ))}
+      </div>
+    ) : (
+      <p style={{ margin: 0, color: '#9ca3af' }}>
+        No process relationships detected yet.
+      </p>
+    )}
+  </div>
+</div>
+
+{apiError && (
             <p role="alert" style={{ color: '#ef4444', margin: '12px 0' }}>
               Backend error: {apiError}
             </p>
